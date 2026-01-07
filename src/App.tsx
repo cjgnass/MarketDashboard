@@ -5,6 +5,7 @@ const URL = "http://localhost";
 const PORT = "8000";
 
 type AssetItem = Record<string, unknown>;
+type BarItem = Record<string, unknown>;
 
 const getFirstValue = (item: AssetItem, keys: string[]) => {
     for (const key of keys) {
@@ -161,38 +162,196 @@ const getSymbol = (item: AssetItem) =>
 const getName = (item: AssetItem) =>
     getFirstValue(item, ["name", "company_name", "display_name", "asset_name"]);
 
+const formatLocalInput = (date: Date) => {
+    const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+    const local = new Date(date.getTime() - offsetMs);
+    return local.toISOString().slice(0, 16);
+};
+
+const normalizeBars = (payload: unknown, symbol: string) => {
+    // console.log("payload", payload);
+    if (Array.isArray(payload)) return payload as BarItem[];
+    if (payload && typeof payload === "object") {
+        const record = payload as Record<string, unknown>;
+        const bars = record.bars;
+        if (Array.isArray(bars)) return bars as BarItem[];
+        if (bars && typeof bars === "object") {
+            const bySymbol = (bars as Record<string, unknown>)[symbol];
+            if (Array.isArray(bySymbol)) return bySymbol as BarItem[];
+        }
+        const direct = record[symbol];
+        if (Array.isArray(direct)) return direct as BarItem[];
+    }
+    return [];
+    // return payload.bars.data.AAPL;
+};
+
+const getBarValue = (bar: BarItem, keys: string[]) =>
+    toNumber(getFirstValue(bar, keys));
+
+const getBarTime = (bar: BarItem) =>
+    String(
+        getFirstValue(bar, [
+            "t",
+            "timestamp",
+            "time",
+            "start",
+            "date",
+            "datetime",
+        ]) ?? "--",
+    );
+
+const TIMEFRAME_LABELS: Record<string, string> = {
+    "1Min": "1 Min",
+    "5Min": "5 Min",
+    "15Min": "15 Min",
+    "1Hour": "1 Hour",
+    "1Day": "1 Day",
+};
+
+const LIVE_WINDOW_OPTIONS = [
+    { value: 30, label: "30 Min" },
+    { value: 120, label: "2 Hours" },
+    { value: 360, label: "6 Hours" },
+    { value: 1440, label: "1 Day" },
+];
+
+const RANGE_WINDOW_OPTIONS = [
+    { value: 60, label: "1 Hour" },
+    { value: 120, label: "2 Hours" },
+    { value: 360, label: "6 Hours" },
+    { value: 720, label: "12 Hours" },
+    { value: 1440, label: "1 Day" },
+    { value: 2880, label: "2 Days" },
+    { value: 10080, label: "7 Days" },
+];
+
+const sanitizeSymbol = (value: string) => value.trim().toUpperCase();
+
 function App() {
     const [mostActiveStocks, setMostActiveStocks] = useState<unknown>([]);
     const [stockMarketMovers, setStockMarketMovers] = useState<unknown>([]);
     const [cryptoMarketMovers, setCryptoMarketMovers] = useState<unknown>([]);
+    const [stockList, setStockList] = useState<string[]>([]);
+    const [selectedSymbol, setSelectedSymbol] = useState("AAPL");
+    const [symbolQuery, setSymbolQuery] = useState("AAPL");
+    const [barMode, setBarMode] = useState<"live" | "range">("live");
+    const [timeframe, setTimeframe] = useState("1Min");
+    const [liveWindowMinutes, setLiveWindowMinutes] = useState(120);
+    const [rangeWindowMinutes, setRangeWindowMinutes] = useState(120);
+    const [rangeStart, setRangeStart] = useState(() => {
+        const end = new Date();
+        const start = new Date(end.getTime() - 2 * 60 * 60 * 1000);
+        return formatLocalInput(start);
+    });
+    const [barPayload, setBarPayload] = useState<unknown>([]);
+    const [barStatus, setBarStatus] = useState<"idle" | "loading" | "error">(
+        "idle",
+    );
 
     useEffect(() => {
         async function load() {
             try {
-                const [activeRes, stockMoverRes, cryptoMoverRes] =
+                const [activeRes, stockMoverRes, cryptoMoverRes, stockListRes] =
                     await Promise.all([
                         fetch(`${URL}:${PORT}/get-most-active-stocks`),
                         fetch(`${URL}:${PORT}/get-stock-market-movers`),
                         fetch(`${URL}:${PORT}/get-crypto-market-movers`),
+                        fetch(`${URL}:${PORT}/get-stock-list`),
                     ]);
-                if (!activeRes.ok || !stockMoverRes.ok || !cryptoMoverRes.ok) {
+                if (
+                    !activeRes.ok ||
+                    !stockMoverRes.ok ||
+                    !cryptoMoverRes.ok ||
+                    !stockListRes.ok
+                ) {
                     throw new Error(`One or more request failed`);
                 }
-                const [activeData, stockMoverData, cryptoMoverData] =
-                    await Promise.all([
-                        activeRes.json(),
-                        stockMoverRes.json(),
-                        cryptoMoverRes.json(),
-                    ]);
+                const [
+                    activeData,
+                    stockMoverData,
+                    cryptoMoverData,
+                    stockListData,
+                ] = await Promise.all([
+                    activeRes.json(),
+                    stockMoverRes.json(),
+                    cryptoMoverRes.json(),
+                    stockListRes.json(),
+                ]);
                 setMostActiveStocks(activeData.most_active_stocks);
                 setStockMarketMovers(stockMoverData.stock_market_movers);
                 setCryptoMarketMovers(cryptoMoverData.crypto_market_movers);
+                setStockList(
+                    Array.isArray(stockListData.stock_list)
+                        ? stockListData.stock_list
+                        : [],
+                );
             } catch (err) {
                 console.log(err);
             }
         }
         load();
     }, []);
+
+    useEffect(() => {
+        if (barMode === "range" && !rangeStart) {
+            return undefined;
+        }
+        let active = true;
+        const loadBars = async () => {
+            setBarStatus("loading");
+            try {
+                const params = new URLSearchParams({ symbol: selectedSymbol });
+                if (timeframe) params.set("timeframe", timeframe);
+                if (barMode === "live") {
+                    const end = new Date();
+                    const start = new Date(
+                        end.getTime() - liveWindowMinutes * 60 * 1000,
+                    );
+                    params.set("start", start.toISOString());
+                    params.set("end", end.toISOString());
+                } else {
+                    const start = new Date(rangeStart);
+                    if (Number.isNaN(start.getTime())) return;
+                    const end = new Date(
+                        start.getTime() + rangeWindowMinutes * 60 * 1000,
+                    );
+                    params.set("start", start.toISOString());
+                    params.set("end", end.toISOString());
+                }
+                const res = await fetch(
+                    `${URL}:${PORT}/get-stock-bars?${params.toString()}`,
+                );
+                if (!res.ok) throw new Error("Failed to load bars");
+                const data = await res.json();
+                if (!active) return;
+                console.log("get-stock-bars response: ", data);
+                setBarPayload(data);
+                setBarStatus("idle");
+            } catch (err) {
+                console.log(err);
+                if (active) setBarStatus("error");
+            }
+        };
+        loadBars();
+        const interval =
+            barMode === "live" ? setInterval(loadBars, 15000) : null;
+        return () => {
+            active = false;
+            if (interval) clearInterval(interval);
+        };
+    }, [
+        selectedSymbol,
+        timeframe,
+        rangeStart,
+        barMode,
+        liveWindowMinutes,
+        rangeWindowMinutes,
+    ]);
+
+    useEffect(() => {
+        setSymbolQuery(selectedSymbol);
+    }, [selectedSymbol]);
 
     const mostActiveItems = useMemo(
         () => normalizeList(mostActiveStocks),
@@ -202,11 +361,66 @@ function App() {
         () => normalizeMovers(stockMarketMovers),
         [stockMarketMovers],
     );
-    const cryptoMovers = useMemo(
-        () => normalizeMovers(cryptoMarketMovers),
-        [cryptoMarketMovers],
-    );
-
+	    const cryptoMovers = useMemo(() => {
+	        return normalizeMovers(cryptoMarketMovers);
+	    }, [cryptoMarketMovers]);
+	    const symbolLookup = useMemo(() => new Set(stockList), [stockList]);
+	    const barItems = useMemo(
+	        () => normalizeBars(barPayload, selectedSymbol),
+	        [barPayload, selectedSymbol],
+	    );
+    const displayBars = useMemo(() => {
+        if (barMode === "live") return barItems.slice(-60);
+        return barItems;
+    }, [barItems, barMode]);
+    const symbolSuggestions = useMemo(() => {
+        if (!stockList.length) return [];
+        const query = symbolQuery.trim().toUpperCase();
+        if (!query) return stockList.slice(0, 60);
+        return stockList
+            .filter((symbol) => symbol.startsWith(query))
+            .slice(0, 60);
+    }, [stockList, symbolQuery]);
+    const barStats = useMemo(() => {
+        let min = Number.POSITIVE_INFINITY;
+        let max = Number.NEGATIVE_INFINITY;
+        for (const bar of displayBars) {
+            const low = getBarValue(bar, ["l", "low", "low_price"]);
+            const high = getBarValue(bar, ["h", "high", "high_price"]);
+            if (low !== undefined) min = Math.min(min, low);
+            if (high !== undefined) max = Math.max(max, high);
+        }
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+            return { min: 0, max: 1 };
+        }
+        return { min, max };
+    }, [displayBars]);
+    const latestBar = displayBars[displayBars.length - 1];
+    const timeframeLabel = TIMEFRAME_LABELS[timeframe] ?? timeframe;
+    const liveWindowLabel =
+        LIVE_WINDOW_OPTIONS.find((option) => option.value === liveWindowMinutes)
+            ?.label ?? `${liveWindowMinutes} Min`;
+    const rangeWindowLabel =
+        RANGE_WINDOW_OPTIONS.find((option) => option.value === rangeWindowMinutes)
+            ?.label ?? `${rangeWindowMinutes} Min`;
+    const statusLabel =
+        barStatus === "loading"
+            ? "Updating..."
+            : barStatus === "error"
+              ? "Feed error"
+              : barMode === "live"
+                ? "Live (IEX delayed)"
+                : "Historical snapshot";
+    const rangeEndLabel = useMemo(() => {
+        const start = new Date(rangeStart);
+        if (!rangeStart || Number.isNaN(start.getTime())) return "";
+        const end = new Date(start.getTime() + rangeWindowMinutes * 60 * 1000);
+        return formatLocalInput(end);
+    }, [rangeStart, rangeWindowMinutes]);
+    const rangeLabel =
+        barMode === "live"
+            ? `Rolling ${liveWindowLabel}`
+            : `${rangeStart || "--"} to ${rangeEndLabel || "--"} · ${rangeWindowLabel}`;
     return (
         <div className="page">
             <header className="hero">
@@ -221,6 +435,284 @@ function App() {
             </header>
 
             <main className="content">
+                <section className="section">
+                    <div className="section-header">
+                        <div>
+                            <h2>Live Candle Bars</h2>
+                            <p className="section-subtitle">
+                                Switch between a rolling IEX stream and
+                                historical bars by date range.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="candle-panel">
+                        <div className="control-row">
+                            <div className="control-field">
+                                <span>Mode</span>
+                                <div className="mode-toggle">
+                                    <button
+                                        type="button"
+                                        className={
+                                            barMode === "live"
+                                                ? "mode-button active"
+                                                : "mode-button"
+                                        }
+                                        onClick={() => setBarMode("live")}
+                                    >
+                                        Live
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={
+                                            barMode === "range"
+                                                ? "mode-button active"
+                                                : "mode-button"
+                                        }
+                                        onClick={() => setBarMode("range")}
+                                    >
+                                        Historical
+                                    </button>
+                                </div>
+	                            </div>
+	                            <div className="control-field">
+	                                <span>Symbol</span>
+	                                <form
+	                                    className="symbol-search"
+	                                    onSubmit={(event) => {
+	                                        event.preventDefault();
+                                        const nextSymbol =
+                                            sanitizeSymbol(symbolQuery);
+                                        if (nextSymbol) {
+                                            setSelectedSymbol(nextSymbol);
+                                        }
+                                    }}
+                                >
+	                                    <input
+	                                        type="text"
+	                                        list="symbol-options"
+	                                        value={symbolQuery}
+	                                        onChange={(event) => {
+	                                            const nextValue =
+	                                                event.target.value.toUpperCase();
+	                                            setSymbolQuery(nextValue);
+	                                            const nextSymbol =
+	                                                sanitizeSymbol(nextValue);
+	                                            if (
+	                                                nextSymbol &&
+	                                                symbolLookup.has(nextSymbol)
+	                                            ) {
+	                                                setSelectedSymbol(nextSymbol);
+	                                            }
+	                                        }}
+	                                        placeholder="Search symbol"
+	                                    />
+	                                    <button type="submit">Use</button>
+	                                </form>
+	                            </div>
+                            <label className="control-field">
+                                <span>Timeframe</span>
+                                <select
+                                    value={timeframe}
+                                    onChange={(event) =>
+                                        setTimeframe(event.target.value)
+                                    }
+                                >
+                                    <option value="1Min">1 Min</option>
+                                    <option value="5Min">5 Min</option>
+                                    <option value="15Min">15 Min</option>
+                                    <option value="1Hour">1 Hour</option>
+                                    <option value="1Day">1 Day</option>
+                                </select>
+                            </label>
+                            {barMode === "live" ? (
+                                <label className="control-field">
+                                    <span>Live Window</span>
+                                    <select
+                                        value={liveWindowMinutes}
+                                        onChange={(event) =>
+                                            setLiveWindowMinutes(
+                                                Number(event.target.value),
+                                            )
+                                        }
+                                    >
+                                        {LIVE_WINDOW_OPTIONS.map((option) => (
+                                            <option
+                                                key={option.value}
+                                                value={option.value}
+                                            >
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+	                            ) : (
+	                                <>
+	                                    <label className="control-field">
+	                                        <span>Start</span>
+	                                        <input
+	                                            type="datetime-local"
+	                                            value={rangeStart}
+	                                            onChange={(event) =>
+	                                                setRangeStart(
+	                                                    event.target.value,
+	                                                )
+	                                            }
+	                                        />
+	                                    </label>
+	                                    <label className="control-field">
+	                                        <span>Window</span>
+	                                        <select
+	                                            value={rangeWindowMinutes}
+	                                            onChange={(event) =>
+	                                                setRangeWindowMinutes(
+	                                                    Number(event.target.value),
+	                                                )
+	                                            }
+	                                        >
+	                                            {RANGE_WINDOW_OPTIONS.map(
+	                                                (option) => (
+	                                                    <option
+	                                                        key={option.value}
+	                                                        value={option.value}
+	                                                    >
+	                                                        {option.label}
+	                                                    </option>
+	                                                ),
+	                                            )}
+	                                        </select>
+	                                    </label>
+	                                </>
+	                            )}
+	                        </div>
+                        <datalist id="symbol-options">
+                            {symbolSuggestions.map((symbol) => (
+                                <option key={symbol} value={symbol} />
+                            ))}
+                        </datalist>
+                        <p className="feed-note">
+                            IEX free tier data is delayed and limited. Live mode
+                            polls recent IEX bars; historical mode uses your
+                            selected range.
+                        </p>
+                        <div className="candle-summary">
+                            <div>
+                                <p className="symbol">{selectedSymbol}</p>
+                                <p className="name">
+                                    {displayBars.length
+                                        ? `${displayBars.length} bars · ${timeframeLabel}`
+                                        : "No bars yet"}
+                                </p>
+                            </div>
+                            <div className="summary-meta">
+                                <span>{statusLabel}</span>
+                                <span>{rangeLabel}</span>
+                                <span>
+                                    {latestBar ? getBarTime(latestBar) : "--"}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="candle-chart">
+                            <svg viewBox="0 0 1000 260" role="img">
+                                <rect
+                                    x="0"
+                                    y="0"
+                                    width="1000"
+                                    height="260"
+                                    rx="18"
+                                />
+                                <text x="40" y="32">
+                                    {formatCurrency(barStats.max)}
+                                </text>
+                                <text x="40" y="242">
+                                    {formatCurrency(barStats.min)}
+                                </text>
+                                {displayBars.map((bar, index) => {
+                                    const open = getBarValue(bar, [
+                                        "o",
+                                        "open",
+                                        "open_price",
+                                    ]);
+                                    const close = getBarValue(bar, [
+                                        "c",
+                                        "close",
+                                        "close_price",
+                                    ]);
+                                    const high = getBarValue(bar, [
+                                        "h",
+                                        "high",
+                                        "high_price",
+                                    ]);
+                                    const low = getBarValue(bar, [
+                                        "l",
+                                        "low",
+                                        "low_price",
+                                    ]);
+                                    if (
+                                        open === undefined ||
+                                        close === undefined ||
+                                        high === undefined ||
+                                        low === undefined
+                                    ) {
+                                        return null;
+                                    }
+                                    const chartTop = 40;
+                                    const chartBottom = 220;
+                                    const height = chartBottom - chartTop;
+                                    const range = Math.max(
+                                        barStats.max - barStats.min,
+                                        0.0001,
+                                    );
+                                    const yFor = (value: number) =>
+                                        chartTop +
+                                        ((barStats.max - value) / range) *
+                                            height;
+                                    const xStep = 900 / displayBars.length;
+                                    const x = 50 + index * xStep;
+                                    const candleWidth = Math.max(
+                                        4,
+                                        xStep * 0.45,
+                                    );
+                                    const bodyTop = Math.min(
+                                        yFor(open),
+                                        yFor(close),
+                                    );
+                                    const bodyBottom = Math.max(
+                                        yFor(open),
+                                        yFor(close),
+                                    );
+                                    const color =
+                                        close >= open
+                                            ? "var(--candle-up)"
+                                            : "var(--candle-down)";
+                                    return (
+                                        <g key={`${index}-${open}`}>
+                                            <line
+                                                x1={x}
+                                                x2={x}
+                                                y1={yFor(high)}
+                                                y2={yFor(low)}
+                                                stroke={color}
+                                                strokeWidth="2"
+                                                strokeLinecap="round"
+                                            />
+                                            <rect
+                                                x={x - candleWidth / 2}
+                                                y={bodyTop}
+                                                width={candleWidth}
+                                                height={Math.max(
+                                                    2,
+                                                    bodyBottom - bodyTop,
+                                                )}
+                                                fill={color}
+                                                rx="2"
+                                            />
+                                        </g>
+                                    );
+                                })}
+                            </svg>
+                        </div>
+                    </div>
+                </section>
                 <section className="section">
                     <div className="section-header">
                         <div>
