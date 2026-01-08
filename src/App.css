@@ -399,6 +399,27 @@
     letter-spacing: 0.08em;
 }
 
+.candle-chart .axis-label {
+    fill: rgba(245, 246, 242, 0.7);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+}
+
+.candle-chart .axis-line {
+    stroke: rgba(245, 246, 242, 0.24);
+    stroke-width: 1;
+}
+
+.candle-chart .axis-tick {
+    stroke: rgba(245, 246, 242, 0.35);
+    stroke-width: 1;
+}
+
+.candle-chart .axis-grid {
+    stroke: rgba(245, 246, 242, 0.12);
+    stroke-width: 1;
+}
+
 @media (max-width: 720px) {
     .page {
         padding: 32px 18px 56px;

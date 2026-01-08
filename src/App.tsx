@@ -7,6 +7,15 @@ const PORT = "8000";
 type AssetItem = Record<string, unknown>;
 type BarItem = Record<string, unknown>;
 
+const BAR_TIME_KEYS = [
+    "t",
+    "timestamp",
+    "time",
+    "start",
+    "date",
+    "datetime",
+];
+
 const getFirstValue = (item: AssetItem, keys: string[]) => {
     for (const key of keys) {
         if (item && item[key] !== undefined && item[key] !== null) {
@@ -188,17 +197,61 @@ const normalizeBars = (payload: unknown, symbol: string) => {
 const getBarValue = (bar: BarItem, keys: string[]) =>
     toNumber(getFirstValue(bar, keys));
 
-const getBarTime = (bar: BarItem) =>
-    String(
-        getFirstValue(bar, [
-            "t",
-            "timestamp",
-            "time",
-            "start",
-            "date",
-            "datetime",
-        ]) ?? "--",
-    );
+const parseTimestamp = (value: unknown) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "number" && Number.isFinite(value)) {
+        const ms = value > 1e12 ? value : value * 1000;
+        const date = new Date(ms);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        if (/^\d+(\.\d+)?$/.test(trimmed)) {
+            const numeric = Number(trimmed);
+            if (!Number.isFinite(numeric)) return null;
+            const ms = numeric > 1e12 ? numeric : numeric * 1000;
+            const date = new Date(ms);
+            return Number.isNaN(date.getTime()) ? null : date;
+        }
+        const parsed = Date.parse(trimmed);
+        if (!Number.isFinite(parsed)) return null;
+        const date = new Date(parsed);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+    return null;
+};
+
+const formatAxisTime = (
+    date: Date,
+    options: { showDate: boolean; showTime: boolean },
+) => {
+    const parts: string[] = [];
+    if (options.showDate) {
+        parts.push(
+            new Intl.DateTimeFormat("en-US", {
+                month: "short",
+                day: "numeric",
+            }).format(date),
+        );
+    }
+    if (options.showTime) {
+        parts.push(
+            new Intl.DateTimeFormat("en-US", {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+            }).format(date),
+        );
+    }
+    return parts.join(" ");
+};
+
+const getBarTimestamp = (bar: BarItem) => getFirstValue(bar, BAR_TIME_KEYS);
+
+const getBarTime = (bar: BarItem) => String(getBarTimestamp(bar) ?? "--");
+
+const getBarDate = (bar: BarItem) => parseTimestamp(getBarTimestamp(bar));
 
 const TIMEFRAME_LABELS: Record<string, string> = {
     "1Min": "1 Min",
@@ -393,6 +446,92 @@ function App() {
         }
         return { min, max };
     }, [displayBars]);
+    const candleChart = useMemo(() => {
+        const svgWidth = 1000;
+        const svgHeight = 260;
+        const chartLeft = 96;
+        const chartRight = svgWidth - 28;
+        const chartTop = 34;
+        const chartBottom = svgHeight - 48;
+        const height = chartBottom - chartTop;
+        const range = Math.max(barStats.max - barStats.min, 0.0001);
+        const yFor = (value: number) =>
+            chartTop + ((barStats.max - value) / range) * height;
+
+        const barCount = Math.max(displayBars.length, 1);
+        const chartWidth = chartRight - chartLeft;
+        const xStep = chartWidth / barCount;
+        const xForIndex = (index: number) =>
+            chartLeft + xStep / 2 + index * xStep;
+        const candleWidth = Math.max(4, xStep * 0.6);
+
+        const yTickCount = 5;
+        const yTicks =
+            yTickCount >= 2
+                ? Array.from({ length: yTickCount }, (_, i) => {
+                      const value =
+                          barStats.max - (range * i) / (yTickCount - 1);
+                      return { value, y: yFor(value) };
+                  })
+                : [{ value: barStats.max, y: yFor(barStats.max) }];
+
+        const buildEvenIndices = (length: number, desired: number) => {
+            if (length <= 0) return [];
+            if (desired <= 1) return [0];
+            if (length <= desired) {
+                return Array.from({ length }, (_, i) => i);
+            }
+            const indices = new Set<number>();
+            for (let i = 0; i < desired; i += 1) {
+                indices.add(Math.round((i * (length - 1)) / (desired - 1)));
+            }
+            const sorted = Array.from(indices).sort((a, b) => a - b);
+            if (sorted[0] !== 0) sorted.unshift(0);
+            if (sorted[sorted.length - 1] !== length - 1)
+                sorted.push(length - 1);
+            return sorted;
+        };
+
+        let firstDate: Date | null = null;
+        let lastDate: Date | null = null;
+        for (const bar of displayBars) {
+            const parsed = getBarDate(bar);
+            if (parsed) {
+                if (!firstDate) firstDate = parsed;
+                lastDate = parsed;
+            }
+        }
+        const crossesDay =
+            firstDate &&
+            lastDate &&
+            firstDate.toDateString() !== lastDate.toDateString();
+        const showDate = timeframe === "1Day" || Boolean(crossesDay);
+        const showTime = timeframe !== "1Day";
+
+        const xTickCount = Math.min(6, displayBars.length);
+        const xTicks = buildEvenIndices(displayBars.length, xTickCount).map(
+            (index) => {
+                const bar = displayBars[index];
+                const parsed = bar ? getBarDate(bar) : null;
+                const label = parsed
+                    ? formatAxisTime(parsed, { showDate, showTime })
+                    : getBarTime(bar ?? {}).slice(0, 16);
+                return { index, x: xForIndex(index), label };
+            },
+        );
+
+        return {
+            chartLeft,
+            chartRight,
+            chartTop,
+            chartBottom,
+            yFor,
+            xForIndex,
+            candleWidth,
+            yTicks,
+            xTicks,
+        };
+    }, [barStats.max, barStats.min, displayBars, timeframe]);
     const latestBar = displayBars[displayBars.length - 1];
     const timeframeLabel = TIMEFRAME_LABELS[timeframe] ?? timeframe;
     const liveWindowLabel =
@@ -619,12 +758,69 @@ function App() {
                                     height="260"
                                     rx="18"
                                 />
-                                <text x="40" y="32">
-                                    {formatCurrency(barStats.max)}
-                                </text>
-                                <text x="40" y="242">
-                                    {formatCurrency(barStats.min)}
-                                </text>
+                                <g className="axis">
+                                    <line
+                                        className="axis-line"
+                                        x1={candleChart.chartLeft}
+                                        x2={candleChart.chartLeft}
+                                        y1={candleChart.chartTop}
+                                        y2={candleChart.chartBottom}
+                                    />
+                                    <line
+                                        className="axis-line"
+                                        x1={candleChart.chartLeft}
+                                        x2={candleChart.chartRight}
+                                        y1={candleChart.chartBottom}
+                                        y2={candleChart.chartBottom}
+                                    />
+                                    {candleChart.yTicks.map((tick) => (
+                                        <g key={`y-${tick.value}`}>
+                                            <line
+                                                className="axis-grid"
+                                                x1={candleChart.chartLeft}
+                                                x2={candleChart.chartRight}
+                                                y1={tick.y}
+                                                y2={tick.y}
+                                            />
+                                            <line
+                                                className="axis-tick"
+                                                x1={candleChart.chartLeft - 6}
+                                                x2={candleChart.chartLeft}
+                                                y1={tick.y}
+                                                y2={tick.y}
+                                            />
+                                            <text
+                                                className="axis-label"
+                                                x={candleChart.chartLeft - 10}
+                                                y={tick.y + 4}
+                                                textAnchor="end"
+                                            >
+                                                {formatCurrency(tick.value)}
+                                            </text>
+                                        </g>
+                                    ))}
+                                    {candleChart.xTicks.map((tick) => (
+                                        <g key={`x-${tick.index}`}>
+                                            <line
+                                                className="axis-tick"
+                                                x1={tick.x}
+                                                x2={tick.x}
+                                                y1={candleChart.chartBottom}
+                                                y2={
+                                                    candleChart.chartBottom + 6
+                                                }
+                                            />
+                                            <text
+                                                className="axis-label"
+                                                x={tick.x}
+                                                y={candleChart.chartBottom + 28}
+                                                textAnchor="middle"
+                                            >
+                                                {tick.label}
+                                            </text>
+                                        </g>
+                                    ))}
+                                </g>
                                 {displayBars.map((bar, index) => {
                                     const open = getBarValue(bar, [
                                         "o",
@@ -654,23 +850,9 @@ function App() {
                                     ) {
                                         return null;
                                     }
-                                    const chartTop = 40;
-                                    const chartBottom = 220;
-                                    const height = chartBottom - chartTop;
-                                    const range = Math.max(
-                                        barStats.max - barStats.min,
-                                        0.0001,
-                                    );
-                                    const yFor = (value: number) =>
-                                        chartTop +
-                                        ((barStats.max - value) / range) *
-                                            height;
-                                    const xStep = 900 / displayBars.length;
-                                    const x = 50 + index * xStep;
-                                    const candleWidth = Math.max(
-                                        4,
-                                        xStep * 0.45,
-                                    );
+                                    const yFor = candleChart.yFor;
+                                    const x = candleChart.xForIndex(index);
+                                    const candleWidth = candleChart.candleWidth;
                                     const bodyTop = Math.min(
                                         yFor(open),
                                         yFor(close),
