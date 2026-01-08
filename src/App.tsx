@@ -169,7 +169,6 @@ const formatLocalInput = (date: Date) => {
 };
 
 const normalizeBars = (payload: unknown, symbol: string) => {
-    // console.log("payload", payload);
     if (Array.isArray(payload)) return payload as BarItem[];
     if (payload && typeof payload === "object") {
         const record = payload as Record<string, unknown>;
@@ -325,7 +324,6 @@ function App() {
                 if (!res.ok) throw new Error("Failed to load bars");
                 const data = await res.json();
                 if (!active) return;
-                console.log("get-stock-bars response: ", data);
                 setBarPayload(data);
                 setBarStatus("idle");
             } catch (err) {
@@ -361,14 +359,14 @@ function App() {
         () => normalizeMovers(stockMarketMovers),
         [stockMarketMovers],
     );
-	    const cryptoMovers = useMemo(() => {
-	        return normalizeMovers(cryptoMarketMovers);
-	    }, [cryptoMarketMovers]);
-	    const symbolLookup = useMemo(() => new Set(stockList), [stockList]);
-	    const barItems = useMemo(
-	        () => normalizeBars(barPayload, selectedSymbol),
-	        [barPayload, selectedSymbol],
-	    );
+    const cryptoMovers = useMemo(() => {
+        return normalizeMovers(cryptoMarketMovers);
+    }, [cryptoMarketMovers]);
+    const symbolLookup = useMemo(() => new Set(stockList), [stockList]);
+    const barItems = useMemo(
+        () => normalizeBars(barPayload, selectedSymbol),
+        [barPayload, selectedSymbol],
+    );
     const displayBars = useMemo(() => {
         if (barMode === "live") return barItems.slice(-60);
         return barItems;
@@ -401,8 +399,9 @@ function App() {
         LIVE_WINDOW_OPTIONS.find((option) => option.value === liveWindowMinutes)
             ?.label ?? `${liveWindowMinutes} Min`;
     const rangeWindowLabel =
-        RANGE_WINDOW_OPTIONS.find((option) => option.value === rangeWindowMinutes)
-            ?.label ?? `${rangeWindowMinutes} Min`;
+        RANGE_WINDOW_OPTIONS.find(
+            (option) => option.value === rangeWindowMinutes,
+        )?.label ?? `${rangeWindowMinutes} Min`;
     const statusLabel =
         barStatus === "loading"
             ? "Updating..."
@@ -473,13 +472,13 @@ function App() {
                                         Historical
                                     </button>
                                 </div>
-	                            </div>
-	                            <div className="control-field">
-	                                <span>Symbol</span>
-	                                <form
-	                                    className="symbol-search"
-	                                    onSubmit={(event) => {
-	                                        event.preventDefault();
+                            </div>
+                            <div className="control-field">
+                                <span>Symbol</span>
+                                <form
+                                    className="symbol-search"
+                                    onSubmit={(event) => {
+                                        event.preventDefault();
                                         const nextSymbol =
                                             sanitizeSymbol(symbolQuery);
                                         if (nextSymbol) {
@@ -487,28 +486,28 @@ function App() {
                                         }
                                     }}
                                 >
-	                                    <input
-	                                        type="text"
-	                                        list="symbol-options"
-	                                        value={symbolQuery}
-	                                        onChange={(event) => {
-	                                            const nextValue =
-	                                                event.target.value.toUpperCase();
-	                                            setSymbolQuery(nextValue);
-	                                            const nextSymbol =
-	                                                sanitizeSymbol(nextValue);
-	                                            if (
-	                                                nextSymbol &&
-	                                                symbolLookup.has(nextSymbol)
-	                                            ) {
-	                                                setSelectedSymbol(nextSymbol);
-	                                            }
-	                                        }}
-	                                        placeholder="Search symbol"
-	                                    />
-	                                    <button type="submit">Use</button>
-	                                </form>
-	                            </div>
+                                    <input
+                                        type="text"
+                                        list="symbol-options"
+                                        value={symbolQuery}
+                                        onChange={(event) => {
+                                            const nextValue =
+                                                event.target.value.toUpperCase();
+                                            setSymbolQuery(nextValue);
+                                            const nextSymbol =
+                                                sanitizeSymbol(nextValue);
+                                            if (
+                                                nextSymbol &&
+                                                symbolLookup.has(nextSymbol)
+                                            ) {
+                                                setSelectedSymbol(nextSymbol);
+                                            }
+                                        }}
+                                        placeholder="Search symbol"
+                                    />
+                                    <button type="submit">Use</button>
+                                </form>
+                            </div>
                             <label className="control-field">
                                 <span>Timeframe</span>
                                 <select
@@ -545,45 +544,45 @@ function App() {
                                         ))}
                                     </select>
                                 </label>
-	                            ) : (
-	                                <>
-	                                    <label className="control-field">
-	                                        <span>Start</span>
-	                                        <input
-	                                            type="datetime-local"
-	                                            value={rangeStart}
-	                                            onChange={(event) =>
-	                                                setRangeStart(
-	                                                    event.target.value,
-	                                                )
-	                                            }
-	                                        />
-	                                    </label>
-	                                    <label className="control-field">
-	                                        <span>Window</span>
-	                                        <select
-	                                            value={rangeWindowMinutes}
-	                                            onChange={(event) =>
-	                                                setRangeWindowMinutes(
-	                                                    Number(event.target.value),
-	                                                )
-	                                            }
-	                                        >
-	                                            {RANGE_WINDOW_OPTIONS.map(
-	                                                (option) => (
-	                                                    <option
-	                                                        key={option.value}
-	                                                        value={option.value}
-	                                                    >
-	                                                        {option.label}
-	                                                    </option>
-	                                                ),
-	                                            )}
-	                                        </select>
-	                                    </label>
-	                                </>
-	                            )}
-	                        </div>
+                            ) : (
+                                <>
+                                    <label className="control-field">
+                                        <span>Start</span>
+                                        <input
+                                            type="datetime-local"
+                                            value={rangeStart}
+                                            onChange={(event) =>
+                                                setRangeStart(
+                                                    event.target.value,
+                                                )
+                                            }
+                                        />
+                                    </label>
+                                    <label className="control-field">
+                                        <span>Window</span>
+                                        <select
+                                            value={rangeWindowMinutes}
+                                            onChange={(event) =>
+                                                setRangeWindowMinutes(
+                                                    Number(event.target.value),
+                                                )
+                                            }
+                                        >
+                                            {RANGE_WINDOW_OPTIONS.map(
+                                                (option) => (
+                                                    <option
+                                                        key={option.value}
+                                                        value={option.value}
+                                                    >
+                                                        {option.label}
+                                                    </option>
+                                                ),
+                                            )}
+                                        </select>
+                                    </label>
+                                </>
+                            )}
+                        </div>
                         <datalist id="symbol-options">
                             {symbolSuggestions.map((symbol) => (
                                 <option key={symbol} value={symbol} />

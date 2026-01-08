@@ -166,9 +166,7 @@ def get_stock_bars(
         feed=DataFeed.IEX,
     )
     bars = _serialize_response(historical_stock_client.get_stock_bars(req))
-    if isinstance(bars, dict) and "bars" in bars:
-        return {"symbol": symbol, "bars": bars["bars"]}
-    return {"symbol": symbol, "bars": bars}
+    return {"symbol": symbol, "bars": list(bars["data"].values())[0]}
 
 
 @app.get("/get-live-bars")
